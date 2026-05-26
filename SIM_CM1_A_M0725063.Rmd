@@ -1,0 +1,334 @@
+---
+title: "Analisis Pendapatan Per Bulan pada Database Sakila"
+author: "Dhika Oryza Puta Maryawan_M0725063"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: default
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    highlight: tango
+    number_sections: true
+---
+
+# Pendahuluan
+
+
+**Insight yang Dianalisis:**
+Bagaimana tren pendapatan toko rental film Sakila setiap bulannya?
+Apakah ada bulan-bulan tertentu yang secara konsisten menghasilkan pendapatan
+tertinggi atau terendah?
+
+
+Database **Sakila** adalah database contoh resmi dari MySQL yang merepresentasikan
+sistem manajemen toko rental film. Data mencakup informasi pelanggan, film, stok,
+transaksi rental, hingga pembayaran.
+
+---
+
+# Persiapan
+
+## Library yang Digunakan
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center"
+)
+```
+
+```{r library}
+library(DBI)
+library(RMySQL)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(plotly)
+library(knitr)
+library(kableExtra)
+```
+
+## Koneksi ke Database Sakila
+
+```{r, include=FALSE}
+# Sesuaikan user dan password dengan MySQL 
+con <- dbConnect(
+  RMySQL::MySQL(),
+  dbname   = "sakila",
+  host     = "localhost",
+  port     = 3306,
+  user     = "root",
+  password = "dhika007."
+)
+```
+
+---
+
+# Pengambilan Data
+
+## Query SQL
+
+Data diambil dari tabel `payment` yang berisi setiap transaksi pembayaran.
+Ekstrak tahun, bulan, dan total pendapatan dari kolom `amount` dan `payment_date`.
+
+```{r}
+query <- "
+  SELECT
+    YEAR(payment_date)        AS tahun,
+    MONTH(payment_date)       AS bulan_angka,
+    MONTHNAME(payment_date)   AS bulan_nama,
+    COUNT(payment_id)         AS jumlah_transaksi,
+    ROUND(SUM(amount), 2)     AS total_pendapatan,
+    ROUND(AVG(amount), 2)     AS rata_rata_per_transaksi
+  FROM payment
+  GROUP BY
+    YEAR(payment_date),
+    MONTH(payment_date),
+    MONTHNAME(payment_date)
+  ORDER BY
+    tahun ASC,
+    bulan_angka ASC
+"
+
+df_pendapatan <- dbGetQuery(con, query)
+dbDisconnect(con)
+
+```
+
+## Pratinjau Data
+
+```{r}
+kable(
+  df_pendapatan %>%
+    select(tahun, bulan_angka, bulan_nama, jumlah_transaksi,
+           total_pendapatan, rata_rata_per_transaksi),
+  col.names = c("Tahun", "Bln (No.)", "Bulan", "Jml Transaksi",
+                "Total Pendapatan ($)", "Rata-rata per Transaksi"),
+  caption   = "Tabel 1: Pendapatan Bulanan Toko Sakila"
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width        = FALSE,
+    position          = "center"
+  ) %>%
+  column_spec(5, bold = TRUE, color = "#2e7d32")
+```
+
+---
+
+# Visualisasi Data
+
+## Grafik Tren Pendapatan Bulanan
+
+```{r}
+df_pendapatan <- df_pendapatan %>%
+  mutate(
+    label_bulan = paste0(substr(bulan_nama, 1, 3), "\n", tahun),
+    urutan      = row_number()
+  )
+
+p1 <- ggplot(df_pendapatan,
+             aes(x = urutan, y = total_pendapatan, group = 1)) +
+  geom_area(fill = "#3a5a8c", alpha = 0.15) +
+  geom_line(color = "#3a5a8c", linewidth = 1.2) +
+  geom_point(aes(
+    text = paste0(
+      bulan_nama, " ", tahun,
+      "\nTotal: $", format(total_pendapatan, big.mark = ","),
+      "\nTransaksi: ", jumlah_transaksi
+    )
+  ), color = "#1a3a6c", size = 2.8) +
+  scale_x_continuous(
+    breaks = df_pendapatan$urutan,
+    labels = df_pendapatan$label_bulan
+  ) +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title    = "Tren Pendapatan Bulanan - Toko Rental Sakila",
+    subtitle = "Berdasarkan data tabel payment",
+    x        = "Bulan",
+    y        = "Total Pendapatan (USD)",
+    caption  = "Sumber: Database Sakila"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 14, color = "#1a1a2e"),
+    plot.subtitle    = element_text(color = "gray50", size = 11),
+    axis.text.x      = element_text(size = 8, color = "#333333"),
+    panel.grid.minor = element_blank()
+  )
+
+ggplotly(p1, tooltip = "text")
+```
+
+## Perbandingan Pendapatan Antar Bulan
+
+```{r}
+df_bulan <- df_pendapatan %>%
+  group_by(bulan_angka, bulan_nama) %>%
+  summarise(rata_pendapatan = mean(total_pendapatan), .groups = "drop") %>%
+  arrange(bulan_angka)
+
+p2 <- ggplot(df_bulan,
+             aes(x = reorder(bulan_nama, bulan_angka),
+                 y = rata_pendapatan,
+                 fill = rata_pendapatan,
+                 text = paste0(
+                   bulan_nama,
+                   "\nRata-rata: $",
+                   format(round(rata_pendapatan, 2), big.mark = ",")
+                 ))) +
+  geom_col(width = 0.7) +
+  scale_fill_gradient(low = "#aec6e8", high = "#1a3a6c") +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title    = "Rata-rata Pendapatan per Bulan",
+    subtitle = "Dirata-rata lintas tahun",
+    x        = "Bulan",
+    y        = "Rata-rata Pendapatan (USD)",
+    fill     = "Pendapatan",
+    caption  = "Sumber: Database Sakila"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 14, color = "#1a1a2e"),
+    plot.subtitle    = element_text(color = "gray50", size = 11),
+    axis.text.x      = element_text(angle = 30, hjust = 1, size = 9),
+    legend.position  = "none",
+    panel.grid.minor = element_blank()
+  )
+
+ggplotly(p2, tooltip = "text")
+```
+
+---
+
+# Analisis Data
+
+## Statistik Deskriptif
+
+```{r}
+total_keseluruhan <- sum(df_pendapatan$total_pendapatan)
+total_transaksi   <- sum(df_pendapatan$jumlah_transaksi)
+bulan_terbaik     <- df_pendapatan[which.max(df_pendapatan$total_pendapatan), ]
+bulan_terburuk    <- df_pendapatan[which.min(df_pendapatan$total_pendapatan), ]
+rata_bulanan      <- mean(df_pendapatan$total_pendapatan)
+sd_bulanan        <- sd(df_pendapatan$total_pendapatan)
+cv                <- (sd_bulanan / rata_bulanan) * 100
+```
+
+```{r}
+total_keseluruhan
+total_transaksi  
+bulan_terbaik     
+bulan_terburuk    
+rata_bulanan     
+sd_bulanan        
+cv                
+```
+
+
+
+## Persamaan Matematis
+
+Pendapatan total per bulan:
+
+$$\text{Revenue}_m = \sum_{i=1}^{n_m} \text{amount}_i$$
+
+Rata-rata pendapatan bulanan:
+
+$$\bar{R} = \frac{1}{M} \sum_{m=1}^{M} \text{Revenue}_m$$
+
+Koefisien variasi (CV):
+
+$$CV = \frac{\sigma}{\bar{R}} \times 100\%$$
+
+> **Catatan:** Koefisien Variasi (CV) adalah ukuran statistik yang menunjukkan tingkat variabilitas data relatif terhadap rata-ratanya. Semakin kecil nilai CV,  semakin stabil pendapatan toko setiap bulannya. CV dinyatakan dalam persen (%) sehingga memudahkan perbandingan antar periode tanpa terpengaruh satuan data.
+
+
+
+
+
+
+
+<div class="warn-box">
+**Interpretasi CV:**
+Nilai CV sebesar **`r round(cv, 2)`%** menunjukkan bahwa pendapatan bulanan
+`r if(cv < 20) "relatif stabil (CV < 20%)." else if(cv < 50) "cukup bervariasi, menunjukkan adanya pola musiman (CV 20-50%)." else "sangat fluktuatif (CV > 50%), perlu dievaluasi lebih lanjut."`.
+</div>
+
+
+## Proporsi Pendapatan per Bulan
+
+```{r proporsi}
+df_pendapatan <- df_pendapatan %>%
+  mutate(
+    proporsi_pct = round(total_pendapatan / total_keseluruhan * 100, 2)
+  )
+
+kable(
+  df_pendapatan %>%
+    select(tahun, bulan_nama, total_pendapatan, jumlah_transaksi, proporsi_pct),
+  col.names = c("Tahun", "Bulan", "Total Pendapatan ($)", "Jml Transaksi", "Proporsi (%)"),
+  caption   = "Tabel 2: Proporsi Pendapatan per Bulan",
+  align     = c("c","l","r","r","r")
+) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE
+  ) %>%
+  row_spec(
+    which(df_pendapatan$total_pendapatan == max(df_pendapatan$total_pendapatan)),
+    bold = TRUE, background = "#d4edda"
+  ) %>%
+  row_spec(
+    which(df_pendapatan$total_pendapatan == min(df_pendapatan$total_pendapatan)),
+    background = "#fff3cd"
+  )
+```
+
+---
+
+# Interpretasi
+
+<div class="result-box">
+**Temuan Utama dari Analisis Pendapatan Bulanan:**
+
+1. **Pendapatan tertinggi** terjadi pada bulan **`r bulan_terbaik$bulan_nama` `r bulan_terbaik$tahun`**
+sebesar **$`r format(bulan_terbaik$total_pendapatan, big.mark=",")`**
+dengan `r format(bulan_terbaik$jumlah_transaksi, big.mark=",")` transaksi.
+
+2. **Pendapatan terendah** terjadi pada bulan **`r bulan_terburuk$bulan_nama` `r bulan_terburuk$tahun`**
+sebesar **$`r format(bulan_terburuk$total_pendapatan, big.mark=",")`**.
+
+3. Dengan koefisien variasi sebesar **`r round(cv, 2)`%**, fluktuasi pendapatan antar bulan
+`r if(cv < 20) "terbilang kecil, menunjukkan bisnis yang stabil." else if(cv < 50) "cukup signifikan, menunjukkan adanya pola musiman." else "sangat besar, perlu dievaluasi lebih lanjut."`.
+
+4. Total keseluruhan pendapatan: **$`r format(round(total_keseluruhan, 2), big.mark=",")`**
+dari **`r format(total_transaksi, big.mark=",")`** transaksi.
+</div>
+
+**Rekomendasi bisnis:**
+
+- Tingkatkan stok dan promosi pada bulan-bulan dengan pendapatan tinggi.
+- Buat program diskon pada bulan-bulan dengan pendapatan rendah.
+- Lakukan analisis lanjutan untuk mengetahui korelasi antara genre film dan tren pendapatan.
+
+---
+
+# Kesimpulan
+
+Analisis data pembayaran pada database Sakila menunjukkan adanya variasi pendapatan
+yang cukup jelas antar bulan. Bulan **`r bulan_terbaik$bulan_nama`** menjadi puncak
+pendapatan dengan selisih signifikan dibandingkan bulan lainnya.
+
+Temuan ini memberikan wawasan penting bagi manajemen toko dalam merencanakan strategi
+bisnis yang responsif terhadap pola musiman pelanggan.
+
+
